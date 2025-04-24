@@ -1,0 +1,57 @@
+
+---
+
+## 3  `02-design/.gitlab-ci.yml` (skeleton)
+
+```yaml
+stages: [lint, test, build, scan, deploy]
+
+variables:
+  IMAGE_TAG: $CI_REGISTRY_IMAGE:$CI_COMMIT_SHORT_SHA
+
+default:
+  image: python:3.11-slim
+  before_script:
+    - pip install --quiet ruff pytest
+
+lint:
+  stage: lint
+  script: ruff app/
+  only: [merge_requests, main]
+
+test:
+  stage: test
+  script: pytest -q
+  artifacts:
+    reports:
+      junit: report.xml
+  needs: [lint]
+
+build:
+  stage: build
+  image: docker:24
+  services: [docker:24-dind]
+  script:
+    - docker login -u $CI_REGISTRY_USER -p $CI_JOB_TOKEN $CI_REGISTRY
+    - docker build -t $IMAGE_TAG .
+    - docker push $IMAGE_TAG
+  needs: [test]
+
+scan:
+  stage: scan
+  image: aquasec/trivy:0.52
+  script: trivy image --exit-code 1 --severity CRITICAL $IMAGE_TAG
+  needs: [build]
+
+deploy_vm:
+  stage: deploy
+  image: alpine:3.19
+  variables:
+    DEPLOY_SCRIPT: deploy/deploy_vm.sh
+  before_script:
+    - apk add openssh-client docker-cli
+  script:
+    - chmod +x $DEPLOY_SCRIPT
+    - $DEPLOY_SCRIPT
+  only: [main]
+  needs: [scan]
